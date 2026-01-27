@@ -31,10 +31,23 @@ let myId = null;
 let participants = new Map();
 
 // Configuration
-const JANUS_SERVER = 'ws://localhost:8188';  // Update for production
+let JANUS_SERVER = 'ws://localhost:8188';
+
+// Fetch config from server
+async function loadConfig() {
+  try {
+    const response = await fetch('/api/rooms/config');
+    const config = await response.json();
+    JANUS_SERVER = config.janusUrl;
+  } catch (e) {
+    console.warn('Failed to load config, using default');
+  }
+}
 
 // Initialize
 async function init() {
+  await loadConfig();
+
   try {
     // Fetch room info
     const response = await fetch(`/api/rooms/${roomId}`);

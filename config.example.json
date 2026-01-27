@@ -1,0 +1,7 @@
+{
+  "port": 3000,
+  "sipPassword": "your-shared-secret",
+  "janusUrl": "ws://your-server:8188",
+  "janusAdminUrl": "http://your-server:7088/admin",
+  "janusAdminSecret": "janusoverlord"
+}

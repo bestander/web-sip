@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as roomService from '../services/rooms.js';
+import { config } from '../config.js';
 
 const router = Router();
 
@@ -61,6 +62,13 @@ router.post('/:id/leave', (req, res) => {
   }
 
   res.json(room);
+});
+
+// Config endpoint (only exposes safe values)
+router.get('/config', (_req, res) => {
+  res.json({
+    janusUrl: config.janusUrl
+  });
 });
 
 export default router;
