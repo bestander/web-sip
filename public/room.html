@@ -23,6 +23,7 @@
     <section id="sip-section">
       <h2>Call SIP Phone</h2>
       <div class="sip-controls">
+        <label for="sip-extension" class="sr-only">Extension</label>
         <input type="text" id="sip-extension" placeholder="Extension (e.g., phone1)">
         <button id="call-btn">Call</button>
       </div>
@@ -33,6 +34,7 @@
     </section>
 
     <section id="audio-controls">
+      <h2>Audio</h2>
       <button id="mute-btn">Mute</button>
     </section>
   </main>
@@ -40,6 +42,7 @@
   <dialog id="password-dialog">
     <form method="dialog">
       <h3>Enter SIP Password</h3>
+      <label for="sip-password" class="sr-only">Password</label>
       <input type="password" id="sip-password" required>
       <div class="dialog-buttons">
         <button type="button" id="cancel-password">Cancel</button>
