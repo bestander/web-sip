@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Rooms</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header>
+    <h1>Voice Rooms</h1>
+  </header>
+  <main>
+    <section id="room-list-section">
+      <div class="section-header">
+        <h2>Active Rooms</h2>
+        <button id="create-room-btn">Create Room</button>
+      </div>
+      <div id="room-list">
+        <p class="empty-message">No active rooms</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="create-room-dialog">
+    <form method="dialog">
+      <h3>Create Room</h3>
+      <label for="room-name">Room Name</label>
+      <input type="text" id="room-name" required maxlength="50">
+      <div class="dialog-buttons">
+        <button type="button" id="cancel-create">Cancel</button>
+        <button type="submit">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
