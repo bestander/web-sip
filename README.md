@@ -21,7 +21,7 @@ Simple WebRTC voice rooms with SIP phone integration via Janus Gateway.
 
 Ubuntu:
 ```bash
-apt install janus janus-plugins
+apt install janus
 ```
 
 Or Docker:

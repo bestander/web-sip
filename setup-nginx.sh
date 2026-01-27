@@ -42,8 +42,9 @@ server {
     }
 
     # WebSocket support for Janus
+    # Trailing slash in proxy_pass strips /janus path when forwarding
     location /janus {
-        proxy_pass http://localhost:8188;
+        proxy_pass http://localhost:8188/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";

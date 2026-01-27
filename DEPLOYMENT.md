@@ -79,7 +79,7 @@ apt install -y nodejs
 npm install -g pm2
 
 # 4. Install Janus Gateway
-apt install -y janus janus-plugins
+apt install -y janus
 
 # 5. Configure Janus
 # Edit /etc/janus/janus.transport.websockets.jcfg to enable WebSocket

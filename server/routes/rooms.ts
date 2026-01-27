@@ -28,6 +28,31 @@ router.post('/', (req, res) => {
   res.status(201).json(room);
 });
 
+// Config endpoint (only exposes safe values)
+// Must be before /:id route to avoid matching "config" as an ID
+router.get('/config', (req, res) => {
+  // Use the request's host to construct the WebSocket URL
+  // This ensures it works regardless of domain (localhost, IP, or domain name)
+  const protocol = req.protocol === 'https' ? 'wss:' : 'ws:';
+  const host = req.get('host') || 'localhost';
+  
+  // If config has a custom janusUrl that's not localhost, use it
+  // Otherwise, construct from current request
+  let janusUrl = config.janusUrl;
+  
+  // If the config URL contains localhost or 127.0.0.1, replace with current host
+  if (janusUrl.includes('localhost') || janusUrl.includes('127.0.0.1')) {
+    // Extract path from config (e.g., /janus) or default to /janus
+    const urlMatch = janusUrl.match(/:\/\/[^\/]+(\/.*)?$/);
+    const path = urlMatch && urlMatch[1] ? urlMatch[1] : '/janus';
+    janusUrl = `${protocol}//${host}${path}`;
+  }
+  
+  res.json({
+    janusUrl
+  });
+});
+
 // Get room by ID
 router.get('/:id', (req, res) => {
   const room = roomService.getRoom(req.params.id);
@@ -62,13 +87,6 @@ router.post('/:id/leave', (req, res) => {
   }
 
   res.json(room);
-});
-
-// Config endpoint (only exposes safe values)
-router.get('/config', (_req, res) => {
-  res.json({
-    janusUrl: config.janusUrl
-  });
 });
 
 export default router;

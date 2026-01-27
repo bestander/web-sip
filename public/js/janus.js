@@ -34,11 +34,21 @@ class Janus {
       };
 
       this.ws.onerror = (error) => {
+        console.error('WebSocket error details:', {
+          url: this.server,
+          readyState: this.ws?.readyState,
+          error: error
+        });
         this.onError('WebSocket error', error);
         reject(error);
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
+        console.log('WebSocket closed:', {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean
+        });
         this.onDestroyed();
       };
     });
@@ -164,7 +174,25 @@ class JanusPlugin {
 
     if (options.media?.audio) {
       try {
-        this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        // Check if getUserMedia is available
+        let getUserMedia;
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        } else if (navigator.getUserMedia) {
+          // Fallback for older browsers
+          getUserMedia = (constraints) => {
+            return new Promise((resolve, reject) => {
+              navigator.getUserMedia(constraints, resolve, reject);
+            });
+          };
+        } else {
+          throw new Error('getUserMedia is not available. This may be because:\n' +
+            '1. The page is not served over HTTPS (required for most browsers)\n' +
+            '2. Your browser does not support getUserMedia\n' +
+            '3. Camera/microphone permissions are blocked');
+        }
+
+        this.localStream = await getUserMedia({ audio: true, video: false });
         this.localStream.getTracks().forEach(track => {
           this.pc.addTrack(track, this.localStream);
           this.onLocalTrack(track, true);

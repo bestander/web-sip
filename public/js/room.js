@@ -37,10 +37,15 @@ let JANUS_SERVER = 'ws://localhost:8188';
 async function loadConfig() {
   try {
     const response = await fetch('/api/rooms/config');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
     const config = await response.json();
-    JANUS_SERVER = config.janusUrl;
+    if (config.janusUrl) {
+      JANUS_SERVER = config.janusUrl;
+    }
   } catch (e) {
-    console.warn('Failed to load config, using default');
+    console.warn('Failed to load config, using default:', e);
   }
 }
 
@@ -70,19 +75,25 @@ async function init() {
 }
 
 async function connectToJanus() {
+  console.log('Connecting to Janus at:', JANUS_SERVER);
   janus = new Janus({
     server: JANUS_SERVER,
     error: (error) => {
       console.error('Janus error:', error);
-      showError('Connection error');
+      showError('Connection error: ' + (error.message || 'Failed to connect to Janus server'));
     },
     destroyed: () => {
       console.log('Janus session destroyed');
     }
   });
 
-  await janus.connect();
-  console.log('Connected to Janus');
+  try {
+    await janus.connect();
+    console.log('Connected to Janus');
+  } catch (error) {
+    console.error('Failed to connect to Janus:', error);
+    throw error;
+  }
 
   // Attach to AudioBridge
   audioBridgePlugin = new JanusPlugin({
@@ -107,17 +118,40 @@ async function connectToJanus() {
 }
 
 async function joinAudioBridge() {
-  // Create offer with audio
-  const jsep = await audioBridgePlugin.createOffer({ media: { audio: true } });
+  try {
+    // Create offer with audio
+    const jsep = await audioBridgePlugin.createOffer({ media: { audio: true } });
 
-  // Join room (Janus creates room if it doesn't exist)
-  const response = await audioBridgePlugin.sendWithJsep({
-    request: 'join',
-    room: parseInt(roomId, 36),  // Convert string ID to number
-    display: 'User-' + Math.random().toString(36).substring(2, 6)
-  }, jsep);
+    // Join room (Janus creates room if it doesn't exist)
+    const response = await audioBridgePlugin.sendWithJsep({
+      request: 'join',
+      room: parseInt(roomId, 36),  // Convert string ID to number
+      display: 'User-' + Math.random().toString(36).substring(2, 6)
+    }, jsep);
 
-  console.log('Joined AudioBridge');
+    console.log('Joined AudioBridge');
+  } catch (error) {
+    console.error('Failed to join AudioBridge:', error);
+    let errorMessage = 'Failed to access microphone. ';
+    
+    if (error.message && error.message.includes('getUserMedia is not available')) {
+      if (window.location.protocol === 'http:') {
+        errorMessage += 'This application requires HTTPS to access your microphone. ';
+        errorMessage += 'Please contact the administrator to set up SSL certificates.';
+      } else {
+        errorMessage += error.message;
+      }
+    } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+      errorMessage += 'Microphone permission was denied. Please allow microphone access and refresh the page.';
+    } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+      errorMessage += 'No microphone found. Please connect a microphone and try again.';
+    } else {
+      errorMessage += error.message || 'Unknown error occurred.';
+    }
+    
+    showError(errorMessage);
+    throw error;
+  }
 }
 
 function handleAudioBridgeMessage(msg, jsep) {

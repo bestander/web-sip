@@ -32,7 +32,7 @@ fi
 # Install Janus Gateway
 echo "📦 Installing Janus Gateway..."
 if ! command -v janus &> /dev/null; then
-  apt install -y janus janus-plugins
+  apt install -y janus
 else
   echo "✓ Janus Gateway already installed"
 fi
@@ -92,8 +92,9 @@ server {
     }
 
     # WebSocket support for Janus
+    # Trailing slash in proxy_pass strips /janus path when forwarding
     location /janus {
-        proxy_pass http://localhost:8188;
+        proxy_pass http://localhost:8188/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
