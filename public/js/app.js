@@ -7,6 +7,9 @@ const roomNameInput = document.getElementById('room-name');
 async function fetchRooms() {
   try {
     const response = await fetch('/api/rooms');
+    if (!response.ok) {
+      throw new Error(`HTTP error: ${response.status}`);
+    }
     const rooms = await response.json();
     renderRooms(rooms);
   } catch (error) {
@@ -32,7 +35,7 @@ function renderRooms(rooms) {
         </div>
         ${isFull
           ? '<span class="room-full">(Full)</span>'
-          : `<button onclick="joinRoom('${room.id}')">Join</button>`
+          : `<button class="join-room-btn" data-room-id="${escapeHtml(room.id)}">Join</button>`
         }
       </div>
     `;
@@ -61,6 +64,9 @@ async function createRoom(name) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error: ${response.status}`);
+    }
     const room = await response.json();
     window.location.href = `/room.html?id=${room.id}`;
   } catch (error) {
@@ -88,6 +94,17 @@ createRoomDialog.addEventListener('submit', (e) => {
   const name = roomNameInput.value.trim();
   if (name) {
     createRoom(name);
+  }
+});
+
+// Event delegation for join room buttons
+roomList.addEventListener('click', (e) => {
+  const joinBtn = e.target.closest('.join-room-btn');
+  if (joinBtn) {
+    const roomId = joinBtn.dataset.roomId;
+    if (roomId) {
+      joinRoom(roomId);
+    }
   }
 });
 
