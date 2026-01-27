@@ -311,12 +311,29 @@ cancelPasswordBtn.addEventListener('click', () => {
   passwordDialog.close();
 });
 
-passwordDialog.addEventListener('submit', (e) => {
+passwordDialog.addEventListener('submit', async (e) => {
   e.preventDefault();
   const password = sipPassword.value;
-  if (password) {
+  if (!password) return;
+
+  // Validate password first
+  try {
+    const response = await fetch('/api/sip/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const result = await response.json();
+
+    if (!result.valid) {
+      alert('Invalid password');
+      return;
+    }
+
     initiateSipCall(sipExtension.value.trim(), password);
     passwordDialog.close();
+  } catch (error) {
+    alert('Failed to validate password');
   }
 });
 

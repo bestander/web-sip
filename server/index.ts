@@ -2,6 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import roomRoutes from './routes/rooms.js';
+import sipRoutes from './routes/sip.js';
 import { cleanupExpiredRooms } from './services/rooms.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,6 +19,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/rooms', roomRoutes);
+app.use('/api/sip', sipRoutes);
 
 // Cleanup expired rooms every minute
 setInterval(() => {
