@@ -22,8 +22,8 @@ app.use('/api/rooms', roomRoutes);
 app.use('/api/sip', sipRoutes);
 
 // Cleanup expired rooms every minute
-setInterval(() => {
-  const expired = cleanupExpiredRooms();
+setInterval(async () => {
+  const expired = await cleanupExpiredRooms();
   if (expired.length > 0) {
     console.log(`Cleaned up ${expired.length} expired room(s)`);
   }

@@ -1,4 +1,5 @@
 import { Room } from '../types.js';
+import { destroyAudioBridgeRoom } from './janus.js';
 
 const rooms = new Map<string, Room>();
 
@@ -50,7 +51,7 @@ export function deleteRoom(id: string): boolean {
   return rooms.delete(id);
 }
 
-export function cleanupExpiredRooms(): string[] {
+export async function cleanupExpiredRooms(): Promise<string[]> {
   const now = Date.now();
   const expiredIds: string[] = [];
 
@@ -58,6 +59,10 @@ export function cleanupExpiredRooms(): string[] {
     if (now - room.lastActivity > ROOM_EXPIRY_MS) {
       rooms.delete(id);
       expiredIds.push(id);
+
+      // Also destroy in Janus (convert ID to number)
+      const janusRoomId = parseInt(id, 36);
+      await destroyAudioBridgeRoom(janusRoomId);
     }
   }
 
