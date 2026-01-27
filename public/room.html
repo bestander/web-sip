@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Room - Voice Rooms</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/room.css">
+</head>
+<body>
+  <header>
+    <h1 id="room-title">Loading...</h1>
+    <button id="leave-btn">Leave</button>
+  </header>
+  <main>
+    <section id="participants-section">
+      <h2>Participants</h2>
+      <ul id="participant-list">
+        <li>Connecting...</li>
+      </ul>
+    </section>
+
+    <section id="sip-section">
+      <h2>Call SIP Phone</h2>
+      <div class="sip-controls">
+        <input type="text" id="sip-extension" placeholder="Extension (e.g., phone1)">
+        <button id="call-btn">Call</button>
+      </div>
+      <div id="call-status" class="hidden">
+        <span id="call-status-text"></span>
+        <button id="hangup-btn">Hang Up</button>
+      </div>
+    </section>
+
+    <section id="audio-controls">
+      <button id="mute-btn">Mute</button>
+    </section>
+  </main>
+
+  <dialog id="password-dialog">
+    <form method="dialog">
+      <h3>Enter SIP Password</h3>
+      <input type="password" id="sip-password" required>
+      <div class="dialog-buttons">
+        <button type="button" id="cancel-password">Cancel</button>
+        <button type="submit">Call</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/js/janus.js"></script>
+  <script src="/js/room.js"></script>
+</body>
+</html>

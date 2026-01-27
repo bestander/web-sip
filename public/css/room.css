@@ -1,0 +1,88 @@
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+header button {
+  background: #dc2626;
+}
+
+header button:hover {
+  background: #b91c1c;
+}
+
+section {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+section h2 {
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+  color: #374151;
+}
+
+#participant-list {
+  list-style: none;
+}
+
+#participant-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #eee;
+}
+
+#participant-list li:last-child {
+  border-bottom: none;
+}
+
+.sip-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.sip-controls input {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1rem;
+}
+
+#call-status {
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+#call-status-text {
+  flex: 1;
+}
+
+#hangup-btn {
+  background: #dc2626;
+}
+
+#audio-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+#mute-btn.muted {
+  background: #dc2626;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.error {
+  color: #dc2626;
+  padding: 1rem;
+  background: #fef2f2;
+  border-radius: 4px;
+}
