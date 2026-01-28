@@ -62,8 +62,21 @@ async function init() {
     currentRoom = await response.json();
     roomTitle.textContent = `Room: ${currentRoom.name}`;
 
-    // Join room in backend
-    await fetch(`/api/rooms/${roomId}/join`, { method: 'POST' });
+    // Join room in backend (this creates the room in Janus if first participant)
+    console.log('Joining room in backend...');
+    const joinResponse = await fetch(`/api/rooms/${roomId}/join`, { method: 'POST' });
+    if (!joinResponse.ok) {
+      const error = await joinResponse.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(`Failed to join room: ${error.error || joinResponse.statusText}`);
+    }
+    const updatedRoom = await joinResponse.json();
+    console.log('Backend join successful, room now has', updatedRoom.participants, 'participant(s)');
+    
+    // Small delay to ensure Janus room creation completes
+    if (updatedRoom.participants === 1) {
+      console.log('First participant - waiting a moment for Janus room creation...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
 
     // Connect to Janus
     await connectToJanus();
@@ -122,14 +135,42 @@ async function joinAudioBridge() {
     // Create offer with audio
     const jsep = await audioBridgePlugin.createOffer({ media: { audio: true } });
 
-    // Join room (Janus creates room if it doesn't exist)
+    // Join room - try to create if it's the first participant (fallback if server creation failed)
+    const janusRoomId = parseInt(roomId, 36);
+    const isFirstParticipant = currentRoom.participants === 0;
     const response = await audioBridgePlugin.sendWithJsep({
       request: 'join',
-      room: parseInt(roomId, 36),  // Convert string ID to number
-      display: 'User-' + Math.random().toString(36).substring(2, 6)
+      room: janusRoomId,
+      display: 'User-' + Math.random().toString(36).substring(2, 6),
+      // Try to create room if first participant (may require admin, but worth trying)
+      ...(isFirstParticipant ? { create: true } : {})
     }, jsep);
 
-    console.log('Joined AudioBridge');
+    console.log('Join response:', response);
+
+    // Handle JSEP answer from Janus (this completes the WebRTC negotiation)
+    // Note: JSEP might come in the ack response or in the async event
+    if (response.jsep) {
+      console.log('Received JSEP answer in response, completing WebRTC negotiation');
+      await audioBridgePlugin.handleRemoteJsep(response.jsep);
+    }
+
+    // Check if join was successful in the immediate response
+    const pluginData = response?.plugindata?.data;
+    console.log('Plugin data in response:', pluginData);
+    
+    if (pluginData?.audiobridge === 'joined') {
+      console.log('Joined AudioBridge successfully (immediate response)');
+      myId = pluginData.id;
+      if (pluginData.participants) {
+        updateParticipants(pluginData.participants);
+      }
+    } else if (pluginData?.error_code || pluginData?.error) {
+      throw new Error(pluginData.error || `Join failed with error code ${pluginData.error_code}`);
+    } else {
+      // Janus sent an 'ack', the actual join confirmation will come as an async event
+      console.log('Received ack, waiting for join confirmation event...');
+    }
   } catch (error) {
     console.error('Failed to join AudioBridge:', error);
     let errorMessage = 'Failed to access microphone. ';
@@ -155,24 +196,43 @@ async function joinAudioBridge() {
 }
 
 function handleAudioBridgeMessage(msg, jsep) {
-  console.log('AudioBridge message:', msg);
+  // Check for errors first
+  if (msg.error_code || msg.error) {
+    const isNoSuchRoomError = msg.error_code === 485 && msg.error?.includes('No such room');
+    if (isNoSuchRoomError) {
+      // This is a critical error - the room doesn't exist in Janus
+      console.error('CRITICAL: Room does not exist in Janus:', msg.error);
+      console.error('This means the server-side room creation failed. Check server logs.');
+      showError('Failed to join room: Room not found in Janus. Please try again or contact support.');
+      return;
+    }
+    console.error('AudioBridge error:', msg);
+    // Don't process error messages further
+    return;
+  }
+
+  console.log('AudioBridge message:', msg, 'JSEP:', jsep);
 
   if (msg.audiobridge === 'joined') {
+    console.log('Join confirmed via event, participant ID:', msg.id);
     myId = msg.id;
     updateParticipants(msg.participants || []);
   }
 
   if (msg.audiobridge === 'event') {
     if (msg.participants) {
+      console.log('Participant list updated:', msg.participants);
       updateParticipants(msg.participants);
     }
     if (msg.leaving) {
+      console.log('Participant leaving:', msg.leaving);
       participants.delete(msg.leaving);
       renderParticipants();
     }
   }
 
   if (jsep) {
+    console.log('Handling JSEP from event');
     audioBridgePlugin.handleRemoteJsep(jsep);
   }
 }
@@ -198,14 +258,21 @@ function renderParticipants() {
 }
 
 function playRemoteAudio(stream) {
+  console.log('Playing remote audio stream:', stream);
   let audio = document.getElementById('remote-audio');
   if (!audio) {
     audio = document.createElement('audio');
     audio.id = 'remote-audio';
     audio.autoplay = true;
+    audio.playsInline = true;
     document.body.appendChild(audio);
   }
   audio.srcObject = stream;
+  
+  // Ensure audio plays
+  audio.play().catch(err => {
+    console.error('Failed to play remote audio:', err);
+  });
 }
 
 // SIP calling

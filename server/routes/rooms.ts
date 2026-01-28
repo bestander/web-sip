@@ -66,15 +66,23 @@ router.get('/:id', (req, res) => {
 });
 
 // Join room
-router.post('/:id/join', (req, res) => {
-  const room = roomService.joinRoom(req.params.id);
+router.post('/:id/join', async (req, res) => {
+  try {
+    const room = await roomService.joinRoom(req.params.id);
 
-  if (!room) {
-    res.status(400).json({ error: 'Cannot join room (not found or full)' });
-    return;
+    if (!room) {
+      res.status(400).json({ error: 'Cannot join room (not found or full)' });
+      return;
+    }
+
+    res.json(room);
+  } catch (error: any) {
+    console.error('Error in join room endpoint:', error);
+    res.status(500).json({ 
+      error: 'Failed to join room', 
+      details: error.message 
+    });
   }
-
-  res.json(room);
 });
 
 // Leave room

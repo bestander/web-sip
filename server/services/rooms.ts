@@ -1,5 +1,5 @@
 import { Room } from '../types.js';
-import { destroyAudioBridgeRoom } from './janus.js';
+import { createAudioBridgeRoom, destroyAudioBridgeRoom } from './janus.js';
 
 const rooms = new Map<string, Room>();
 
@@ -27,11 +27,25 @@ export function getAllRooms(): Room[] {
   return Array.from(rooms.values());
 }
 
-export function joinRoom(id: string): Room | undefined {
+export async function joinRoom(id: string): Promise<Room | undefined> {
   const room = rooms.get(id);
   if (!room || room.participants >= 2) {
     return undefined;
   }
+  
+  // Create room in Janus if this is the first participant
+  // If creation fails, we'll still try to join (room might exist from another process)
+  if (room.participants === 0) {
+    const janusRoomId = parseInt(id, 36);
+    console.log(`First participant joining room ${id} (Janus room ${janusRoomId}), creating room in Janus...`);
+    const created = await createAudioBridgeRoom(janusRoomId);
+    if (!created) {
+      console.warn(`Failed to create Janus room ${janusRoomId}, but continuing with join attempt`);
+    } else {
+      console.log(`Successfully prepared Janus room ${janusRoomId} for joining`);
+    }
+  }
+  
   room.participants++;
   room.lastActivity = Date.now();
   return room;

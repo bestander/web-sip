@@ -143,6 +143,87 @@ This will show if the server can reach Janus admin API.
 - **Cause**: WebSocket transport disabled in Janus config
 - **Fix**: Enable in `/etc/janus/janus.transport.websockets.jcfg` and restart
 
+### Issue: "No such room" error when joining
+- **Cause**: Janus admin API is not reachable, so rooms cannot be created
+- **Symptoms**: 
+  - Diagnostics show `"reachable": false` for admin API
+  - Error: "No such room (room_id)" when joining
+- **Fix**: Enable Janus admin API
+
+#### Enable Janus Admin API
+
+1. **Check if admin API is enabled:**
+   ```bash
+   grep -r "admin_http" /etc/janus/janus.jcfg
+   ```
+
+2. **Edit Janus main config:**
+   ```bash
+   sudo nano /etc/janus/janus.jcfg
+   ```
+
+3. **Find and enable admin HTTP API:**
+   Look for the `admin_http` section and ensure it's enabled:
+   ```json
+   {
+       "admin_http": {
+           "admin_http": true,
+           "admin_http_port": 7088,
+           "admin_http_acl": "127.,192.168."
+       }
+   }
+   ```
+
+4. **If the section doesn't exist, add it:**
+   ```json
+   {
+       "general": {
+           ...
+       },
+       "admin_http": {
+           "admin_http": true,
+           "admin_http_port": 7088
+       }
+   }
+   ```
+
+5. **Set admin secret (if not already set):**
+   ```bash
+   sudo nano /etc/janus/janus.jcfg
+   ```
+   Find `admin_secret` and set it (or add it):
+   ```json
+   {
+       "general": {
+           "admin_secret": "janusoverlord"
+       }
+   }
+   ```
+
+6. **Restart Janus:**
+   ```bash
+   sudo systemctl restart janus
+   ```
+
+7. **Verify admin API is working:**
+   ```bash
+   curl -X POST http://localhost:7088/admin -H "Content-Type: application/json" -d '{"janus":"info"}'
+   ```
+   You should get a JSON response with Janus info.
+
+8. **Update config.json:**
+   Ensure your `config.json` has the correct admin secret:
+   ```json
+   {
+       "janusAdminUrl": "http://localhost:7088/admin",
+       "janusAdminSecret": "janusoverlord"
+   }
+   ```
+
+9. **Test again:**
+   - Visit `/api/diagnostics` - admin API should show `"reachable": true`
+   - Try joining a room - it should work now
+
 ## Testing the Fix
 
 After making changes:
@@ -150,5 +231,7 @@ After making changes:
 1. Restart nginx: `systemctl restart nginx`
 2. Restart Janus: `systemctl restart janus`
 3. Check status: `systemctl status janus nginx`
-4. Try connecting from browser again
+4. Test admin API: `curl -X POST http://localhost:7088/admin -d '{"janus":"info"}'`
+5. Check diagnostics: Visit `/api/diagnostics` in browser
+6. Try connecting from browser again
 

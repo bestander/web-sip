@@ -17,35 +17,37 @@ Simple WebRTC voice rooms with SIP phone integration via Janus Gateway.
 
 ## Quick Start
 
-### 1. Install Janus
+### Server Setup
 
-Ubuntu:
-```bash
-apt install janus
-```
-
-Or Docker:
-```bash
-docker run -d --network host meetecho/janus-gateway
-```
-
-### 2. Configure Janus
-
-Enable WebSocket transport in `/etc/janus/janus.transport.websockets.jcfg`.
-
-Enable AudioBridge and SIP plugins.
-
-### 3. Install and Run
+Run the automated setup script on your server:
 
 ```bash
-npm install
-cp config.example.json config.json
-# Edit config.json with your settings
-npm run build
-npm start
+./setup.sh
 ```
 
-### 4. Configure SIP Device
+For HTTPS with Let's Encrypt:
+```bash
+DOMAIN_NAME=yourdomain.com ./setup.sh
+```
+
+This script will:
+- Install Node.js, PM2, Janus Gateway, and Nginx
+- Configure Janus with admin API
+- Set up Nginx reverse proxy
+- Configure firewall rules
+- Optionally set up HTTPS with Let's Encrypt
+
+### Deploy Application
+
+After setup, deploy your code:
+
+```bash
+./deploy.sh your-server-ip
+```
+
+The deployment script will create `config.json` automatically. You may need to edit it to set your SIP password.
+
+### Configure SIP Device
 
 On your HT802 or similar ATA:
 - SIP Server: your server IP
@@ -54,15 +56,25 @@ On your HT802 or similar ATA:
 
 ## Configuration
 
-Edit `config.json`:
+The `config.json` file is created automatically during deployment. You may need to edit it to set your SIP password:
+
+```json
+{
+  "port": 3000,
+  "sipPassword": "your-shared-secret",
+  "janusUrl": "ws://localhost:8188",
+  "janusAdminUrl": "http://localhost:7088/admin",
+  "janusAdminSecret": "janusoverlord"
+}
+```
 
 | Key | Description |
 |-----|-------------|
 | port | HTTP server port (default: 3000) |
-| sipPassword | Shared password for SIP access |
+| sipPassword | Shared password for SIP access (change this!) |
 | janusUrl | Janus WebSocket URL |
 | janusAdminUrl | Janus Admin API URL |
-| janusAdminSecret | Janus admin secret |
+| janusAdminSecret | Janus admin secret (set by setup.sh) |
 
 ## Usage
 

@@ -93,7 +93,24 @@ class Janus {
     if (message.sender) {
       const handle = this.handles.get(message.sender);
       if (handle) {
+        console.log('Routing async event to handle:', message.sender, 'Message type:', message.janus);
         handle.handleMessage(message);
+      } else {
+        console.warn('No handle found for sender:', message.sender, 'Available handles:', Array.from(this.handles.keys()));
+      }
+    }
+
+    // Handle trickle ICE candidates from Janus
+    if (message.janus === 'trickle' && message.sender) {
+      const handle = this.handles.get(message.sender);
+      if (handle && handle.pc) {
+        if (message.candidate) {
+          handle.pc.addIceCandidate(new RTCIceCandidate(message.candidate))
+            .catch(err => console.error('Failed to add ICE candidate:', err));
+        } else if (message.completed) {
+          // ICE gathering complete
+          console.log('ICE gathering completed');
+        }
       }
     }
   }
@@ -145,8 +162,16 @@ class JanusPlugin {
   }
 
   handleMessage(message) {
+    console.log('JanusPlugin.handleMessage:', message.janus, message);
     if (message.janus === 'event') {
+      console.log('Processing event, plugin data:', message.plugindata?.data, 'JSEP:', message.jsep);
       this.onMessage(message.plugindata?.data, message.jsep);
+    } else if (message.janus === 'webrtcup') {
+      console.log('WebRTC connection established');
+    } else if (message.janus === 'hangup') {
+      console.log('Call hung up');
+    } else {
+      console.log('Unhandled message type:', message.janus);
     }
   }
 
@@ -228,9 +253,12 @@ class JanusPlugin {
     });
 
     this.pc.ontrack = (event) => {
-      event.streams[0].getTracks().forEach(track => {
-        this.onRemoteTrack(track, event.streams[0], true);
-      });
+      console.log('Received remote track:', event.track.kind, event.streams);
+      if (event.streams && event.streams.length > 0) {
+        event.streams[0].getTracks().forEach(track => {
+          this.onRemoteTrack(track, event.streams[0], true);
+        });
+      }
     };
 
     this.pc.onicecandidate = (event) => {
@@ -240,7 +268,22 @@ class JanusPlugin {
           handle_id: this.handleId,
           candidate: event.candidate
         });
+      } else {
+        // ICE gathering complete
+        this.janus.sendMessage({
+          janus: 'trickle',
+          handle_id: this.handleId,
+          candidate: { completed: true }
+        });
       }
+    };
+
+    this.pc.onconnectionstatechange = () => {
+      console.log('WebRTC connection state:', this.pc.connectionState);
+    };
+
+    this.pc.oniceconnectionstatechange = () => {
+      console.log('ICE connection state:', this.pc.iceConnectionState);
     };
   }
 
