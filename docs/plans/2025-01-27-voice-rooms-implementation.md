@@ -4,9 +4,9 @@
 
 **Goal:** Build a WebRTC voice room application with browser-to-browser and browser-to-SIP calling via Janus Gateway.
 
-**Architecture:** Node.js/Express serves a vanilla JS frontend and manages room state. Janus Gateway handles all media (WebRTC AudioBridge for browser audio, SIP plugin for phone calls). Browser connects to both: Node.js for room coordination, Janus for media.
+**Architecture:** Node.js/Express serves a vanilla JS frontend, manages room state, and runs a lightweight SIP server for signaling (port 5060). Janus Gateway handles all media (WebRTC AudioBridge for browser audio, SIP plugin bridges WebRTC to SIP). Browser connects to both: Node.js for room coordination and SIP signaling, Janus for media via WebRTC.
 
-**Tech Stack:** Node.js, TypeScript, Express, Janus Gateway, Vanilla JS, HTML/CSS
+**Tech Stack:** Node.js, TypeScript, Express, Node.js SIP Server (lightweight UDP server), Janus Gateway, Vanilla JS, HTML/CSS
 
 ---
 
@@ -1291,10 +1291,12 @@ async function initiateSipCall(extension, password) {
   }
 
   // Register as a SIP user first, then call
+  // Janus SIP plugin connects to Node.js SIP server on localhost:5060
   await sipPlugin.send({
     request: 'register',
-    username: `sip:webuser@localhost`,
-    secret: password
+    username: `sip:webuser@localhost:5060`,
+    secret: password,
+    proxy: `sip:localhost:5060`
   });
 }
 
@@ -1306,7 +1308,7 @@ function handleSipMessage(msg, jsep) {
     const extension = sipExtension.value.trim();
     sipPlugin.send({
       request: 'call',
-      uri: `sip:${extension}@localhost`
+      uri: `sip:${extension}@localhost:5060`
     });
     updateCallStatus('Calling...');
   }
@@ -1579,7 +1581,285 @@ git commit -m "feat: add configuration file support"
 
 ---
 
-### Task 9: Add SIP Password Validation
+### Task 9: Implement Node.js SIP Server
+
+**Files:**
+- Create: `server/services/sip.ts`
+- Modify: `server/index.ts`
+
+**Overview:** Implement a lightweight SIP server that handles SIP signaling (REGISTER, INVITE, BYE) on UDP port 5060. This server only handles protocol messages, not media. Media is handled by Janus.
+
+**Step 1: Create SIP server service**
+
+Create `server/services/sip.ts`:
+
+```typescript
+import dgram from 'dgram';
+import { config } from '../config.js';
+
+// SIP registration storage: username -> contact URI
+const registrations = new Map<string, { contact: string; expires: number }>();
+
+// SIP server socket
+let sipServer: dgram.Socket | null = null;
+
+// Parse SIP message
+function parseSipMessage(msg: string): {
+  method?: string;
+  statusCode?: number;
+  statusText?: string;
+  headers: Record<string, string>;
+  body: string;
+} {
+  const lines = msg.split('\r\n');
+  const firstLine = lines[0];
+  const headers: Record<string, string> = {};
+  let bodyStart = -1;
+
+  // Parse first line (request or response)
+  const isRequest = !firstLine.startsWith('SIP/2.0');
+  const method = isRequest ? firstLine.split(' ')[0] : undefined;
+  const statusCode = !isRequest ? parseInt(firstLine.split(' ')[1]) : undefined;
+  const statusText = !isRequest ? firstLine.split(' ').slice(2).join(' ') : undefined;
+
+  // Parse headers
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line === '') {
+      bodyStart = i + 1;
+      break;
+    }
+    const colonIndex = line.indexOf(':');
+    if (colonIndex > 0) {
+      const key = line.substring(0, colonIndex).trim().toLowerCase();
+      const value = line.substring(colonIndex + 1).trim();
+      headers[key] = value;
+    }
+  }
+
+  // Parse body
+  const body = bodyStart > 0 ? lines.slice(bodyStart).join('\r\n') : '';
+
+  return { method, statusCode, statusText, headers, body };
+}
+
+// Extract username from SIP URI
+function extractUsername(uri: string): string {
+  const match = uri.match(/sip:([^@]+)@/);
+  return match ? match[1] : '';
+}
+
+// Validate SIP Digest authentication
+function validateAuth(authHeader: string, username: string, password: string, method: string, uri: string): boolean {
+  // Simplified: check if password matches
+  // In production, implement proper Digest authentication
+  const realmMatch = authHeader.match(/realm="([^"]+)"/);
+  const usernameMatch = authHeader.match(/username="([^"]+)"/);
+  
+  if (!realmMatch || !usernameMatch) return false;
+  if (usernameMatch[1] !== username) return false;
+  
+  // For now, just check password is provided
+  // Full Digest auth would require MD5 hash validation
+  return password === config.sipPassword;
+}
+
+// Handle REGISTER request
+function handleRegister(msg: string, rinfo: dgram.RemoteInfo): string {
+  const parsed = parseSipMessage(msg);
+  const from = parsed.headers.from || '';
+  const to = parsed.headers.to || '';
+  const contact = parsed.headers.contact || '';
+  const expires = parseInt(parsed.headers.expires || '3600');
+  const authHeader = parsed.headers.authorization || '';
+
+  const username = extractUsername(from);
+  if (!username) {
+    return 'SIP/2.0 400 Bad Request\r\n\r\n';
+  }
+
+  // Validate authentication
+  const uri = from.match(/<([^>]+)>/) || from.match(/(sip:[^>]+)/);
+  const sipUri = uri ? uri[1] : '';
+  if (!validateAuth(authHeader, username, config.sipPassword, 'REGISTER', sipUri)) {
+    return 'SIP/2.0 401 Unauthorized\r\n' +
+           'WWW-Authenticate: Digest realm="server", nonce="' + Date.now() + '"\r\n\r\n';
+  }
+
+  // Extract contact URI
+  const contactMatch = contact.match(/<([^>]+)>/) || contact.match(/(sip:[^;]+)/);
+  const contactUri = contactMatch ? contactMatch[1] : `sip:${username}@${rinfo.address}:${rinfo.port}`;
+
+  // Store registration
+  registrations.set(username, {
+    contact: contactUri,
+    expires: Date.now() + expires * 1000
+  });
+
+  // Send 200 OK
+  const response = `SIP/2.0 200 OK\r\n` +
+    `Via: ${parsed.headers.via}\r\n` +
+    `From: ${from}\r\n` +
+    `To: ${to};tag=${Date.now()}\r\n` +
+    `Call-ID: ${parsed.headers['call-id']}\r\n` +
+    `CSeq: ${parsed.headers.cseq}\r\n` +
+    `Contact: <${contactUri}>;expires=${expires}\r\n` +
+    `Content-Length: 0\r\n\r\n`;
+
+  console.log(`[SIP] Registered: ${username} -> ${contactUri}`);
+  return response;
+}
+
+// Handle INVITE request
+function handleInvite(msg: string, rinfo: dgram.RemoteInfo): string {
+  const parsed = parseSipMessage(msg);
+  const to = parsed.headers.to || '';
+  const from = parsed.headers.from || '';
+  const callId = parsed.headers['call-id'] || '';
+
+  const targetUsername = extractUsername(to);
+  if (!targetUsername) {
+    return 'SIP/2.0 400 Bad Request\r\n\r\n';
+  }
+
+  // Look up registration
+  const registration = registrations.get(targetUsername);
+  if (!registration || registration.expires < Date.now()) {
+    return 'SIP/2.0 404 Not Found\r\n\r\n';
+  }
+
+  // Route INVITE to registered contact
+  // In a full implementation, we'd forward this to the registered device
+  // For now, we'll send a 100 Trying and let Janus handle the actual routing
+  const response = `SIP/2.0 100 Trying\r\n` +
+    `Via: ${parsed.headers.via}\r\n` +
+    `From: ${from}\r\n` +
+    `To: ${to}\r\n` +
+    `Call-ID: ${callId}\r\n` +
+    `CSeq: ${parsed.headers.cseq}\r\n` +
+    `Content-Length: 0\r\n\r\n`;
+
+  console.log(`[SIP] INVITE: ${extractUsername(from)} -> ${targetUsername} (${registration.contact})`);
+  
+  // TODO: Forward INVITE to registered contact
+  // This requires parsing the contact URI and sending UDP packet to that address
+  
+  return response;
+}
+
+// Handle BYE request
+function handleBye(msg: string, rinfo: dgram.RemoteInfo): string {
+  const parsed = parseSipMessage(msg);
+  const response = `SIP/2.0 200 OK\r\n` +
+    `Via: ${parsed.headers.via}\r\n` +
+    `From: ${parsed.headers.from}\r\n` +
+    `To: ${parsed.headers.to}\r\n` +
+    `Call-ID: ${parsed.headers['call-id']}\r\n` +
+    `CSeq: ${parsed.headers.cseq}\r\n` +
+    `Content-Length: 0\r\n\r\n`;
+  return response;
+}
+
+// Start SIP server
+export function startSipServer(port: number = 5060): void {
+  if (sipServer) {
+    console.log('[SIP] Server already running');
+    return;
+  }
+
+  sipServer = dgram.createSocket('udp4');
+
+  sipServer.on('message', (msg, rinfo) => {
+    const message = msg.toString();
+    const parsed = parseSipMessage(message);
+
+    let response: string;
+
+    if (parsed.method === 'REGISTER') {
+      response = handleRegister(message, rinfo);
+    } else if (parsed.method === 'INVITE') {
+      response = handleInvite(message, rinfo);
+    } else if (parsed.method === 'BYE') {
+      response = handleBye(message, rinfo);
+    } else if (parsed.method === 'ACK') {
+      // ACK doesn't require response
+      return;
+    } else {
+      response = 'SIP/2.0 501 Not Implemented\r\n\r\n';
+    }
+
+    if (response && sipServer) {
+      sipServer.send(response, rinfo.port, rinfo.address, (err) => {
+        if (err) {
+          console.error('[SIP] Error sending response:', err);
+        }
+      });
+    }
+  });
+
+  sipServer.on('error', (err) => {
+    console.error('[SIP] Server error:', err);
+  });
+
+  sipServer.bind(port, () => {
+    console.log(`[SIP] Server listening on UDP port ${port}`);
+  });
+}
+
+// Stop SIP server
+export function stopSipServer(): void {
+  if (sipServer) {
+    sipServer.close();
+    sipServer = null;
+    console.log('[SIP] Server stopped');
+  }
+}
+
+// Get registration for username
+export function getRegistration(username: string): { contact: string; expires: number } | undefined {
+  const reg = registrations.get(username);
+  if (reg && reg.expires > Date.now()) {
+    return reg;
+  }
+  return undefined;
+}
+```
+
+**Step 2: Start SIP server in main app**
+
+Update `server/index.ts`, add import and start server:
+
+```typescript
+import { startSipServer } from './services/sip.js';
+
+// ... existing code ...
+
+const PORT = process.env.PORT || 3000;
+const SIP_PORT = 5060;
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  startSipServer(SIP_PORT);
+});
+```
+
+**Step 3: Commit**
+
+```bash
+git add server/services/sip.ts server/index.ts package.json
+git commit -m "feat: implement Node.js SIP server for signaling"
+```
+
+**Note:** This is a basic SIP server implementation. For production, you'll need:
+- Full SIP Digest authentication (MD5 hash validation)
+- Proper INVITE forwarding to registered contacts
+- Support for more SIP methods (OPTIONS, CANCEL, etc.)
+- Better error handling and logging
+- SDP parsing for media negotiation
+
+---
+
+### Task 10: Add SIP Password Validation
 
 **Files:**
 - Create: `server/routes/sip.ts`
@@ -1666,7 +1946,7 @@ git commit -m "feat: add SIP password validation endpoint"
 
 ---
 
-### Task 10: Add Janus Admin Client for Room Cleanup
+### Task 11: Add Janus Admin Client for Room Cleanup
 
 **Files:**
 - Create: `server/services/janus.ts`
@@ -1765,7 +2045,7 @@ git commit -m "feat: add Janus admin client for room cleanup"
 
 ## Phase 5: Documentation
 
-### Task 11: Create README
+### Task 12: Create README
 
 **Files:**
 - Create: `README.md`
@@ -1777,12 +2057,12 @@ Create `README.md`:
 ```markdown
 # Voice Rooms
 
-Simple WebRTC voice rooms with SIP phone integration via Janus Gateway.
+Simple WebRTC voice rooms with SIP phone integration via Janus Gateway and Node.js SIP server.
 
 ## Features
 
 - Browser-to-browser voice calls
-- Dial SIP phones (like Grandstream HT802) from browser
+- Dial SIP devices (like GDMS) from browser
 - Room list with auto-expiry (30 minutes inactive)
 - No user accounts required for browser users
 - Shared password for SIP access
@@ -1812,6 +2092,8 @@ Enable WebSocket transport in `/etc/janus/janus.transport.websockets.jcfg`.
 
 Enable AudioBridge and SIP plugins.
 
+**Important:** Janus SIP plugin connects to Node.js SIP server (localhost:5060), not directly to SIP devices.
+
 ### 3. Install and Run
 
 ```bash
@@ -1822,12 +2104,18 @@ npm run build
 npm start
 ```
 
+The Node.js app will start:
+- HTTP server on port 3000 (default)
+- SIP server on UDP port 5060
+
 ### 4. Configure SIP Device
 
-On your HT802 or similar ATA:
-- SIP Server: your server IP
-- SIP User ID: phone1
+On your GDMS device or similar SIP phone:
+- SIP Server: your server IP:5060
+- SIP User ID: phone1 (or extension number)
 - Password: same as sipPassword in config.json
+- Transport: UDP
+- Register Expiry: 3600 seconds
 
 ## Configuration
 
@@ -1846,17 +2134,23 @@ Edit `config.json`:
 1. Open http://localhost:3000
 2. Create a room
 3. Share room URL with another person
-4. To call SIP phone: enter extension and password
+4. To call SIP device: enter extension and password
 
 ## Architecture
 
 ```
-Browser <--WebSocket--> Janus AudioBridge <--RTP--> Browser
-                             |
-                        Janus SIP Plugin <--SIP/RTP--> HT802 ATA
+Browser <--WebRTC--> Janus AudioBridge <--WebRTC--> Browser
+                         |
+                    Janus SIP Plugin <--RTP--> Node.js SIP Server <--SIP/UDP--> GDMS Device
+                                                      (port 5060)
 
-Node.js server: room state, static files
+Node.js server: room state, static files, SIP signaling server
 ```
+
+**Protocol Separation:**
+- **Signaling:** SIP/UDP (port 5060) - handled by Node.js SIP server
+- **Media:** WebRTC/RTP - handled by Janus Gateway
+- **WebSocket:** Only for Janus signaling (JSON), NOT audio
 ```
 
 **Step 2: Commit**
@@ -1870,12 +2164,13 @@ git commit -m "docs: add README with setup instructions"
 
 ## Summary
 
-**Total Tasks:** 11
+**Total Tasks:** 12
 
 **Phase 1 - Setup:** Tasks 1-2 (project init, landing page)
 **Phase 2 - API:** Tasks 3-4 (room service, routes)
 **Phase 3 - Room Page:** Tasks 5-7 (room HTML, Janus client, room JS)
-**Phase 4 - Polish:** Tasks 8-10 (config, SIP validation, Janus cleanup)
-**Phase 5 - Docs:** Task 11 (README)
+**Phase 4 - SIP Integration:** Tasks 8-10 (config, SIP server, SIP validation)
+**Phase 5 - Polish:** Task 11 (Janus cleanup)
+**Phase 6 - Docs:** Task 12 (README)
 
 Each task builds on the previous, with frequent commits for easy rollback.

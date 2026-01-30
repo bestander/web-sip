@@ -13,36 +13,52 @@ A simple voice room application where:
 ┌─────────────────────────────────────────────────────────┐
 │                    DigitalOcean Droplet                 │
 │                                                         │
-│  ┌─────────────────┐       ┌─────────────────────────┐  │
-│  │   Node.js App   │       │     Janus Gateway       │  │
-│  │                 │       │                         │  │
-│  │  - Room mgmt    │       │  - AudioBridge plugin   │  │
-│  │  - Static files │       │    (browser↔browser)    │  │
-│  │  - Session mgmt │       │                         │  │
-│  │                 │       │  - SIP plugin           │  │
-│  │                 │       │    (browser→SIP phone)  │  │
-│  └────────┬────────┘       └──────────┬──────────────┘  │
-│           │ :3000                     │ :8188 (WS)      │
-└───────────┼───────────────────────────┼─────────────────┘
-            │                           │
-    ┌───────┴───────┐           ┌───────┴────────┐
-    │    Browser    │           │    HT802 ATA   │
-    │  (Vanilla JS) │           │   (SIP phone)  │
-    └───────────────┘           └────────────────┘
+│  ┌───────────────────────────────────────────────────┐  │
+│  │            Node.js App                            │  │
+│  │                                                    │  │
+│  │  - Room mgmt (HTTP API)                           │  │
+│  │  - Static files (HTML/JS/CSS)                     │  │
+│  │  - SIP Server (signaling only, port 5060)         │  │
+│  │    • REGISTER handling                            │  │
+│  │    • INVITE routing                               │  │
+│  │    • Call state management                        │  │
+│  └──────────────┬────────────────────────────────────┘  │
+│                 │ :3000 (HTTP)                          │
+│                 │ :5060 (SIP/UDP)                      │
+│                 │                                       │
+│  ┌──────────────┴────────────────────────────────────┐  │
+│  │            Janus Gateway                          │  │
+│  │                                                    │  │
+│  │  - AudioBridge plugin (browser↔browser mixing)    │  │
+│  │  - SIP plugin (WebRTC↔SIP media bridge)          │  │
+│  └──────────────┬────────────────────────────────────┘  │
+│                 │ :8188 (WebSocket)                     │
+│                 │ :10000-10200 (RTP/UDP)                 │
+└─────────────────┼───────────────────────────────────────┘
+                  │
+    ┌─────────────┴─────────────┐           ┌──────────────┐
+    │      Browser              │           │  GDMS Device │
+    │   (Vanilla JS/WebRTC)     │           │  (SIP phone) │
+    └───────────────────────────┘           └──────────────┘
 ```
 
 **Components:**
 
-1. **Node.js App** - Handles room state, serves the HTML/JS frontend. No media touches this.
-2. **Janus Gateway** - Handles all WebRTC and SIP media. Browser connects directly via WebSocket.
-3. **Browser** - Vanilla JS app that talks to both Node.js (for rooms) and Janus (for media).
-4. **HT802** - Registers to Janus SIP plugin. When browser dials its extension, Janus bridges the audio.
+1. **Node.js App** - Handles room state, serves HTML/JS frontend, **runs lightweight SIP server for signaling** (port 5060). SIP server only handles protocol messages, no media processing.
+2. **Janus Gateway** - Handles all WebRTC and SIP media. Browser connects via WebSocket. Janus SIP plugin connects to Node.js SIP server as a client.
+3. **Browser** - Vanilla JS app that talks to both Node.js (for rooms) and Janus (for media via WebRTC).
+4. **GDMS Device** - Registers to Node.js SIP server. When browser dials via Janus, Janus connects to Node.js SIP server which routes to the device.
+
+**Protocol Separation:**
+- **Signaling**: SIP protocol (UDP port 5060) - handled by Node.js SIP server
+- **Media**: RTP/WebRTC - handled by Janus Gateway
 
 ## Tech Stack
 
 - Node.js/TypeScript backend (Express)
+  - Lightweight SIP server library (e.g., `sip.js` or custom UDP server)
 - Vanilla JS/HTML frontend
-- Janus Gateway for WebRTC + SIP media
+- Janus Gateway for WebRTC + SIP media bridging
 - JSON file for config (shared SIP password)
 - DigitalOcean droplet
 
@@ -52,7 +68,7 @@ A simple voice room application where:
 |--------|----------------|
 | Create/join room (browser-to-browser) | No - open access |
 | Dial SIP phone from room | Yes - must know the password |
-| HT802 registers to Janus | Yes - same password |
+| GDMS device registers to Node.js SIP server | Yes - same password |
 
 Single shared password stored in `config.json`, used for both SIP calling and device registration.
 
@@ -96,48 +112,426 @@ Node.js runs a check every 60 seconds:
 
 ## SIP Calling Flow
 
-### HT802 Registration (one-time setup)
+### GDMS Device Registration (one-time setup)
+
+**Protocol:** SIP/UDP on port 5060
 
 ```
-HT802 ATA                                        Janus SIP Plugin
+GDMS Device                                    Node.js SIP Server
     │                                                   │
-    │  SIP REGISTER                                     │
-    │  user: "phone1", password: "shared-secret"        │
-    │ ─────────────────────────────────────────────────>│
+    │  REGISTER sip:phone1@server:5060 SIP/2.0         │
+    │  Via: SIP/2.0/UDP device-ip:5060                 │
+    │  From: <sip:phone1@server>                       │
+    │  To: <sip:phone1@server>                         │
+    │  Contact: <sip:phone1@device-ip:5060>            │
+    │  Authorization: Digest username="phone1",        │
+    │                  realm="server",                 │
+    │                  password="shared-secret"        │
+    │  Expires: 3600                                   │
+    │ ────────────────────────────────────────────────>│
     │                                                   │
-    │  200 OK (registered)                              │
-    │ <─────────────────────────────────────────────────│
+    │  (Node.js validates password, stores registration)│
+    │                                                   │
+    │  SIP/2.0 200 OK                                  │
+    │  From: <sip:phone1@server>                       │
+    │  To: <sip:phone1@server>                         │
+    │  Contact: <sip:phone1@device-ip:5060>;expires=3600│
+    │ <───────────────────────────────────────────────│
+    │                                                   │
+    │  (Device registered, will refresh every 3600s)   │
 ```
 
-### Browser Dials SIP Phone
+**Messages:**
+- **REGISTER** (SIP/UDP) - Device registers with username/password
+- **200 OK** (SIP/UDP) - Server confirms registration
+
+**Protocol Details:**
+- Transport: UDP on port 5060
+- Authentication: SIP Digest (username + password)
+- Registration stored in Node.js memory/database
+- Device must re-register before expiry (typically every 3600 seconds)
+
+### Browser Dials GDMS Device - Complete Flow
+
+**Step 1: User Initiates Call (Browser → Janus)**
 
 ```
-Browser                          Janus                    HT802
-   │                               │                         │
-   │  (user in AudioBridge room)   │                         │
-   │                               │                         │
-   │  "dial phone1"                │                         │
-   │  + password: "shared-secret"  │                         │
-   │ ─────────────────────────────>│                         │
-   │                               │  verify password        │
-   │                               │                         │
-   │                               │  SIP INVITE phone1      │
-   │                               │ ───────────────────────>│
-   │                               │                         │
-   │                               │  180 Ringing            │
-   │  "ringing"                    │ <───────────────────────│
-   │ <─────────────────────────────│                         │
-   │                               │                         │
-   │                               │  200 OK (answered)      │
-   │                               │ <───────────────────────│
-   │                               │                         │
-   │                               │  Audio bridged:         │
-   │  <─────────────── RTP ───────>│<──────── RTP ──────────>│
-   │                               │                         │
-   │  (both parties can talk)      │                         │
+Browser                          Janus SIP Plugin
+    │                               │
+    │  WebSocket (JSON)             │
+    │  {                             │
+    │    "janus": "message",         │
+    │    "body": {                   │
+    │      "request": "register",    │
+    │      "username": "sip:webuser@localhost",│
+    │      "secret": "shared-secret",│
+    │      "proxy": "sip:localhost:5060"│
+    │    }                           │
+    │  }                             │
+    │ ──────────────────────────────>│
+    │                               │
+    │  (Janus SIP plugin validates password)│
+    │                               │
+    │  WebSocket (JSON)             │
+    │  {                             │
+    │    "sip": "event",             │
+    │    "result": {                 │
+    │      "event": "registered"    │
+    │    }                           │
+    │  }                             │
+    │ <─────────────────────────────│
 ```
 
-Either party can hang up - Janus handles SIP BYE in both directions.
+**Protocol:** WebSocket (JSON) on port 8188
+
+**Step 2: Janus Registers with Node.js SIP Server**
+
+```
+Janus SIP Plugin                    Node.js SIP Server
+    │                                   │
+    │  REGISTER sip:webuser@localhost:5060 SIP/2.0│
+    │  Via: SIP/2.0/UDP localhost:random-port      │
+    │  From: <sip:webuser@localhost>               │
+    │  To: <sip:webuser@localhost>                 │
+    │  Contact: <sip:webuser@janus-ip:port>        │
+    │  Authorization: Digest username="webuser",   │
+    │                  realm="localhost",          │
+    │                  password="shared-secret"    │
+    │  Expires: 3600                                │
+    │ ────────────────────────────────────────────>│
+    │                                   │
+    │  (Node.js validates, stores Janus registration)│
+    │                                   │
+    │  SIP/2.0 200 OK                  │
+    │  Contact: <sip:webuser@janus-ip:port>;expires=3600│
+    │ <───────────────────────────────────────────│
+```
+
+**Protocol:** SIP/UDP on port 5060
+
+**Step 3: Browser Initiates Call to GDMS Device**
+
+```
+Browser                          Janus SIP Plugin
+    │                               │
+    │  WebSocket (JSON)             │
+    │  {                             │
+    │    "janus": "message",         │
+    │    "body": {                   │
+    │      "request": "call",        │
+    │      "uri": "sip:phone1@localhost"│
+    │    }                           │
+    │  }                             │
+    │ ──────────────────────────────>│
+```
+
+**Protocol:** WebSocket (JSON) on port 8188
+
+**Step 4: Janus Sends INVITE to Node.js SIP Server**
+
+```
+Janus SIP Plugin                    Node.js SIP Server
+    │                                   │
+    │  INVITE sip:phone1@localhost:5060 SIP/2.0│
+    │  Via: SIP/2.0/UDP janus-ip:port          │
+    │  From: <sip:webuser@localhost>            │
+    │  To: <sip:phone1@localhost>               │
+    │  Contact: <sip:webuser@janus-ip:port>    │
+    │  Call-ID: unique-call-id                  │
+    │  CSeq: 1 INVITE                           │
+    │  Content-Type: application/sdp            │
+    │  Content-Length: <sdp-length>             │
+    │                                           │
+    │  v=0                                      │
+    │  o=janus ...                              │
+    │  c=IN IP4 janus-ip                       │
+    │  m=audio <rtp-port> RTP/AVP 0 8 96      │
+    │  a=rtpmap:0 PCMU/8000                    │
+    │  a=rtpmap:8 PCMA/8000                    │
+    │  ...                                      │
+    │ ────────────────────────────────────────>│
+    │                                   │
+    │  (Node.js looks up phone1 registration)   │
+    │  (Routes INVITE to registered device)      │
+```
+
+**Protocol:** SIP/UDP on port 5060  
+**SDP:** Contains RTP media information (codecs, IP, ports)
+
+**Step 5: Node.js Routes INVITE to GDMS Device**
+
+```
+Node.js SIP Server                  GDMS Device
+    │                                   │
+    │  INVITE sip:phone1@device-ip:5060 SIP/2.0│
+    │  Via: SIP/2.0/UDP server-ip:5060         │
+    │  Via: SIP/2.0/UDP janus-ip:port          │
+    │  From: <sip:webuser@localhost>            │
+    │  To: <sip:phone1@localhost>               │
+    │  Call-ID: unique-call-id                  │
+    │  CSeq: 1 INVITE                           │
+    │  Content-Type: application/sdp            │
+    │  Content-Length: <sdp-length>             │
+    │                                           │
+    │  v=0                                      │
+    │  o=janus ...                              │
+    │  c=IN IP4 janus-ip                       │
+    │  m=audio <rtp-port> RTP/AVP 0 8 96      │
+    │  ...                                      │
+    │ ────────────────────────────────────────>│
+    │                                   │
+    │  (Device starts ringing)                  │
+    │                                   │
+    │  SIP/2.0 180 Ringing              │
+    │  Via: SIP/2.0/UDP server-ip:5060         │
+    │  From: <sip:webuser@localhost>            │
+    │  To: <sip:phone1@localhost>;tag=device-tag│
+    │  Call-ID: unique-call-id                  │
+    │  CSeq: 1 INVITE                           │
+    │ <─────────────────────────────────────────│
+```
+
+**Protocol:** SIP/UDP on port 5060
+
+**Step 6: Ringing Response Propagates Back**
+
+```
+GDMS Device                    Node.js SIP Server                    Janus SIP Plugin
+    │                                   │                                   │
+    │  180 Ringing                      │                                   │
+    │ ─────────────────────────────────>│                                   │
+    │                                   │  180 Ringing                      │
+    │                                   │ ─────────────────────────────────>│
+    │                                   │                                   │
+    │                                   │                                   │  WebSocket (JSON)
+    │                                   │                                   │  {
+    │                                   │                                   │    "sip": "event",
+    │                                   │                                   │    "result": {
+    │                                   │                                   │      "event": "calling"
+    │                                   │                                   │    }
+    │                                   │                                   │  }
+    │                                   │                                   │ <───────────────────
+    │                                   │                                   │
+    │                                   │                                   │  (Browser shows "Ringing...")
+```
+
+**Protocol:** SIP/UDP (signaling), WebSocket/JSON (to browser)
+
+**Step 7: Device Answers - Media Established**
+
+```
+GDMS Device                    Node.js SIP Server                    Janus SIP Plugin
+    │                                   │                                   │
+    │  SIP/2.0 200 OK                   │                                   │
+    │  From: <sip:webuser@localhost>     │                                   │
+    │  To: <sip:phone1@localhost>;tag=device-tag│                          │
+    │  Contact: <sip:phone1@device-ip:5060>│                                │
+    │  Content-Type: application/sdp     │                                   │
+    │                                    │                                   │
+    │  v=0                               │                                   │
+    │  o=device ...                     │                                   │
+    │  c=IN IP4 device-ip                │                                   │
+    │  m=audio <device-rtp-port> RTP/AVP 0 8│                              │
+    │  ...                               │                                   │
+    │ ─────────────────────────────────>│                                   │
+    │                                    │  200 OK                           │
+    │                                    │ ─────────────────────────────────>│
+    │                                    │                                   │
+    │                                    │                                   │  WebSocket (JSON)
+    │                                    │                                   │  {
+    │                                    │                                   │    "sip": "event",
+    │                                    │                                   │    "result": {
+    │                                    │                                   │      "event": "accepted",
+    │                                    │                                   │      "sdp": "..."
+    │                                    │                                   │    }
+    │                                    │                                   │  }
+    │                                    │                                   │ <───────────────────
+    │                                    │                                   │
+    │                                    │                                   │  (Browser establishes WebRTC)
+```
+
+**Protocol:** SIP/UDP (signaling), WebSocket/JSON (to browser)
+
+**Step 8: Audio Media Flow - How GDMS Audio Reaches Browser**
+
+**Important:** WebSocket is ONLY for signaling (JSON messages). Audio flows via WebRTC (UDP) directly, not through WebSocket.
+
+When a SIP call is active, the browser user is still in the AudioBridge room. Janus bridges the SIP call into the AudioBridge room, so all participants (browser users + SIP device) can hear each other.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Audio Flow Architecture                          │
+└─────────────────────────────────────────────────────────────────────┘
+
+Browser (in AudioBridge room)        Janus Gateway                    GDMS Device
+    │                               │                                   │
+    │                               │  ┌─────────────────────────────┐  │
+    │                               │  │  AudioBridge Room           │  │
+    │                               │  │  (mixes all participants)   │  │
+    │                               │  └───────────┬─────────────────┘  │
+    │                               │              │                      │
+    │                               │  ┌───────────┴─────────────────┐  │
+    │                               │  │  SIP Plugin                 │  │
+    │                               │  │  (bridges SIP ↔ AudioBridge)│  │
+    │                               │  └───────────┬─────────────────┘  │
+    │                               │              │                      │
+    │                               │              │                      │
+    │  WebRTC (DTLS-SRTP/UDP)       │              │                      │
+    │  Audio: Opus/PCM              │              │                      │
+    │  Port: Dynamic (10000-65535)  │              │                      │
+    │ ─────────────────────────────>│              │                      │
+    │                               │  (AudioBridge receives browser audio)│
+    │                               │              │                      │
+    │                               │              │  RTP/UDP              │
+    │                               │              │  Audio: PCMU/PCMA    │
+    │                               │              │  Port: 10000-10200    │
+    │                               │              │ ────────────────────>│
+    │                               │              │                      │
+    │                               │              │  RTP/UDP              │
+    │                               │              │  Audio: PCMU/PCMA    │
+    │                               │              │ <─────────────────────│
+    │                               │  (SIP Plugin receives GDMS audio)   │
+    │                               │              │                      │
+    │                               │  (SIP Plugin bridges RTP into       │
+    │                               │   AudioBridge room)                 │
+    │                               │              │                      │
+    │                               │  (AudioBridge mixes:                │
+    │                               │   - Browser audio                  │
+    │                               │   - GDMS audio                     │
+    │                               │   - Other browser participants)   │
+    │                               │              │                      │
+    │  WebRTC (DTLS-SRTP/UDP)       │              │                      │
+    │  Audio: Opus/PCM              │              │                      │
+    │  (Mixed audio from room)      │              │                      │
+    │ <─────────────────────────────│              │                      │
+    │                               │              │                      │
+    │  (Browser hears:              │              │                      │
+    │   - Other browser users       │              │                      │
+    │   - GDMS device)              │              │                      │
+```
+
+**Detailed Audio Routing:**
+
+1. **Browser → Janus:**
+   - Protocol: WebRTC (DTLS-SRTP) over UDP
+   - Port: Dynamic (negotiated via ICE, typically 10000-65535)
+   - Codec: Opus or PCM (browser's choice)
+   - Path: Browser microphone → WebRTC → Janus AudioBridge plugin
+
+2. **GDMS → Janus:**
+   - Protocol: RTP/UDP
+   - Port: 10000-10200 (configurable in Janus)
+   - Codec: PCMU (G.711 μ-law) or PCMA (G.711 A-law)
+   - Path: GDMS device → RTP → Janus SIP plugin
+
+3. **Janus Internal Bridging:**
+   - SIP plugin receives RTP from GDMS
+   - SIP plugin bridges RTP stream into AudioBridge room
+   - AudioBridge mixes all audio streams:
+     - All browser participants' audio
+     - GDMS device audio
+   - AudioBridge sends mixed audio to all participants
+
+4. **Janus → Browser:**
+   - Protocol: WebRTC (DTLS-SRTP) over UDP
+   - Port: Dynamic (same connection as step 1)
+   - Codec: Opus or PCM (browser's choice)
+   - Content: Mixed audio from AudioBridge (all participants + GDMS)
+   - Path: Janus AudioBridge → WebRTC → Browser speakers
+
+**Key Points:**
+- **WebSocket (port 8188):** Only for signaling - JSON messages for call control, NOT audio
+- **WebRTC (UDP, dynamic ports):** Direct peer-to-peer-like connection for audio between browser and Janus
+- **RTP (UDP, ports 10000-10200):** Audio between Janus and GDMS device
+- **AudioBridge:** Mixes all audio sources and distributes to all participants
+- **Codec Transcoding:** Janus automatically transcodes between WebRTC codecs (Opus/PCM) and SIP codecs (PCMU/PCMA)
+
+**Step 9: Call Termination (Hangup)**
+
+```
+Browser                          Janus SIP Plugin                    Node.js SIP Server                    GDMS Device
+    │                               │                                   │                                   │
+    │  WebSocket (JSON)             │                                   │                                   │
+    │  {"request": "hangup"}        │                                   │                                   │
+    │ ─────────────────────────────>│                                   │                                   │
+    │                               │  BYE sip:phone1@localhost SIP/2.0│                                   │
+    │                               │ ─────────────────────────────────>│                                   │
+    │                               │                                   │  BYE sip:phone1@device-ip:5060 SIP/2.0│
+    │                               │                                   │ ─────────────────────────────────>│
+    │                               │                                   │                                   │
+    │                               │                                   │  SIP/2.0 200 OK                   │
+    │                               │                                   │ <─────────────────────────────────│
+    │                               │  SIP/2.0 200 OK                   │                                   │
+    │                               │ <─────────────────────────────────│                                   │
+    │                               │                                   │                                   │
+    │  WebSocket (JSON)             │                                   │                                   │
+    │  {"event": "hangup"}          │                                   │                                   │
+    │ <─────────────────────────────│                                   │                                   │
+```
+
+**Protocol:** SIP/UDP (BYE message), WebSocket/JSON (to browser)
+
+## Audio Routing Summary
+
+**Critical Understanding:** WebSocket and audio are completely separate:
+
+1. **WebSocket (port 8188):**
+   - Purpose: Signaling only - JSON messages for call control
+   - Used for: "Call", "Hangup", "Ringing", "Accepted" events
+   - Does NOT carry audio
+
+2. **WebRTC (UDP, dynamic ports):**
+   - Purpose: Audio media between browser and Janus
+   - Established via: SDP exchange over WebSocket (signaling)
+   - Uses: DTLS-SRTP encryption
+   - Codecs: Opus, PCM (browser choice)
+   - Direct UDP connection, not through WebSocket
+
+3. **AudioBridge Room:**
+   - When browser joins room: AudioBridge receives browser's WebRTC audio
+   - When SIP call active: SIP plugin bridges GDMS RTP into AudioBridge
+   - AudioBridge mixes: All browser participants + GDMS device
+   - AudioBridge sends: Mixed audio to all participants via WebRTC
+
+4. **Complete Audio Path (GDMS → Browser):**
+   ```
+   GDMS Device
+      ↓ RTP/UDP (PCMU/PCMA)
+   Janus SIP Plugin
+      ↓ (bridges into AudioBridge)
+   AudioBridge Room
+      ↓ (mixes with browser audio)
+   AudioBridge Room
+      ↓ WebRTC/DTLS-SRTP (Opus/PCM)
+   Browser
+   ```
+
+5. **Complete Audio Path (Browser → GDMS):**
+   ```
+   Browser
+      ↓ WebRTC/DTLS-SRTP (Opus/PCM)
+   AudioBridge Room
+      ↓ (mixes with other participants)
+   AudioBridge Room
+      ↓ (SIP plugin extracts audio)
+   Janus SIP Plugin
+      ↓ RTP/UDP (PCMU/PCMA)
+   GDMS Device
+   ```
+
+## Protocol Summary
+
+| Stage | Protocol | Port | Direction | Purpose |
+|-------|----------|------|-----------|---------|
+| Device Registration | SIP/UDP | 5060 | GDMS → Node.js | Register device |
+| Janus Registration | SIP/UDP | 5060 | Janus → Node.js | Register Janus as SIP client |
+| Call Initiation | WebSocket/JSON | 8188 | Browser → Janus | User clicks "Call" |
+| INVITE Signaling | SIP/UDP | 5060 | Janus ↔ Node.js ↔ GDMS | Call setup |
+| Ringing/Answer | SIP/UDP | 5060 | GDMS → Node.js → Janus | Call progress |
+| Media (Audio) | RTP/UDP | 10000-10200 | Janus ↔ GDMS | Audio stream (SIP device) |
+| Media (Audio) | WebRTC/DTLS-SRTP | Dynamic (UDP) | Browser ↔ Janus | Audio stream (WebRTC, NOT WebSocket) |
+| Signaling | WebSocket/JSON | 8188 | Browser ↔ Janus | Call control only, NOT audio |
+| Hangup | SIP/UDP | 5060 | Any → All | Call termination |
 
 ## Frontend UI
 
@@ -207,7 +601,8 @@ sip-project/
 │   │   └── rooms.ts          # Room API endpoints
 │   ├── services/
 │   │   ├── rooms.ts          # Room state management, expiry logic
-│   │   └── janus.ts          # Janus Admin API client (for room cleanup)
+│   │   ├── janus.ts          # Janus Admin API client (for room cleanup)
+│   │   └── sip.ts            # SIP server (REGISTER, INVITE routing)
 │   └── config.json           # SIP password, Janus URL, etc.
 │
 ├── public/
@@ -254,14 +649,25 @@ docker run -d --network host meetecho/janus-gateway
 | `janus.jcfg` | Main config - enable WebSocket transport |
 | `janus.transport.websockets.jcfg` | WebSocket port (8188) |
 | `janus.plugin.audiobridge.jcfg` | Enable AudioBridge, set RTP port range |
-| `janus.plugin.sip.jcfg` | Enable SIP plugin, set local SIP port (5060) |
+| `janus.plugin.sip.jcfg` | Enable SIP plugin (connects to Node.js SIP server) |
 
-### HT802 Configuration
+### Node.js SIP Server Configuration
 
-- SIP Server: `your-droplet-ip`
-- SIP User ID: `phone1`
-- Password: same as `sipPassword` in config.json
-- Register Expiry: 60 seconds
+- **Port:** 5060 (UDP) - standard SIP port
+- **Functionality:**
+  - Accept REGISTER requests from SIP devices
+  - Accept REGISTER requests from Janus SIP plugin
+  - Route INVITE messages between Janus and SIP devices
+  - Handle BYE, CANCEL, and other SIP messages
+  - Store registration state (username → contact URI)
+
+### GDMS Device Configuration
+
+- **SIP Server:** `your-droplet-ip:5060`
+- **SIP User ID:** `phone1` (or extension number)
+- **Password:** same as `sipPassword` in config.json
+- **Register Expiry:** 3600 seconds (1 hour)
+- **Transport:** UDP
 
 ### Running the App
 

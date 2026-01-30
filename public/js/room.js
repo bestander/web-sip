@@ -286,10 +286,12 @@ async function initiateSipCall(extension, password) {
   }
 
   // Register as a SIP user first, then call
+  // Janus SIP plugin connects to Node.js SIP server on localhost:5060
   await sipPlugin.send({
     request: 'register',
-    username: `sip:webuser@localhost`,
-    secret: password
+    username: `sip:webuser@localhost:5060`,
+    secret: password,
+    proxy: `sip:localhost:5060`
   });
 }
 
@@ -301,7 +303,7 @@ function handleSipMessage(msg, jsep) {
     const extension = sipExtension.value.trim();
     sipPlugin.send({
       request: 'call',
-      uri: `sip:${extension}@localhost`
+      uri: `sip:${extension}@localhost:5060`
     });
     updateCallStatus('Calling...');
   }

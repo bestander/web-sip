@@ -4,12 +4,14 @@ import { dirname, join } from 'path';
 import roomRoutes from './routes/rooms.js';
 import sipRoutes from './routes/sip.js';
 import { cleanupExpiredRooms } from './services/rooms.js';
+import { startSipServer } from './services/sip.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const SIP_PORT = 5060;
 
 // Trust proxy (for correct protocol detection behind nginx)
 app.set('trust proxy', true);
@@ -208,4 +210,5 @@ setInterval(async () => {
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  startSipServer(SIP_PORT);
 });
