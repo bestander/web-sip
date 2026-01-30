@@ -301,6 +301,13 @@ function handleSipMessage(msg, jsep) {
   if (msg.result?.event === 'registered') {
     // Now make the call
     const extension = sipExtension.value.trim();
+    console.log('SIP registered, attempting to call extension:', extension);
+    if (!extension) {
+      console.error('No extension provided for call');
+      updateCallStatus('Error: No extension');
+      return;
+    }
+    console.log('Sending call request to:', `sip:${extension}@localhost:5060`);
     sipPlugin.send({
       request: 'call',
       uri: `sip:${extension}@localhost:5060`
